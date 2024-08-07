@@ -1,0 +1,21 @@
+edition = "2023";
+
+option features.field_presence = IMPLICIT;
+option go_package = "myDb/server";
+
+package rpc;
+
+service RaftService {
+    rpc SendAppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse) {}
+}
+
+message AppendEntriesRequest {
+  int32 Term = 1;
+  string Id = 2;
+}
+
+message AppendEntriesResponse {
+  int32 Term = 1;
+  string Id = 2;
+  bool Sucecss = 3;
+}
