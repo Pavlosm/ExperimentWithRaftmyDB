@@ -19,14 +19,16 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	RaftService_SendAppendEntries_FullMethodName = "/main.RaftService/SendAppendEntries"
+	RaftService_AppendEntries_FullMethodName = "/rpc.RaftService/AppendEntries"
+	RaftService_RequestVote_FullMethodName   = "/rpc.RaftService/RequestVote"
 )
 
 // RaftServiceClient is the client API for RaftService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type RaftServiceClient interface {
-	SendAppendEntries(ctx context.Context, in *AppendEntriesRequest, opts ...grpc.CallOption) (*AppendEntriesResponse, error)
+	AppendEntries(ctx context.Context, in *AppendEntriesRequest, opts ...grpc.CallOption) (*AppendEntriesResponse, error)
+	RequestVote(ctx context.Context, in *RequestVoteRequest, opts ...grpc.CallOption) (*RequestVoteResponse, error)
 }
 
 type raftServiceClient struct {
@@ -37,10 +39,20 @@ func NewRaftServiceClient(cc grpc.ClientConnInterface) RaftServiceClient {
 	return &raftServiceClient{cc}
 }
 
-func (c *raftServiceClient) SendAppendEntries(ctx context.Context, in *AppendEntriesRequest, opts ...grpc.CallOption) (*AppendEntriesResponse, error) {
+func (c *raftServiceClient) AppendEntries(ctx context.Context, in *AppendEntriesRequest, opts ...grpc.CallOption) (*AppendEntriesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AppendEntriesResponse)
-	err := c.cc.Invoke(ctx, RaftService_SendAppendEntries_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, RaftService_AppendEntries_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *raftServiceClient) RequestVote(ctx context.Context, in *RequestVoteRequest, opts ...grpc.CallOption) (*RequestVoteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RequestVoteResponse)
+	err := c.cc.Invoke(ctx, RaftService_RequestVote_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +63,8 @@ func (c *raftServiceClient) SendAppendEntries(ctx context.Context, in *AppendEnt
 // All implementations must embed UnimplementedRaftServiceServer
 // for forward compatibility.
 type RaftServiceServer interface {
-	SendAppendEntries(context.Context, *AppendEntriesRequest) (*AppendEntriesResponse, error)
+	AppendEntries(context.Context, *AppendEntriesRequest) (*AppendEntriesResponse, error)
+	RequestVote(context.Context, *RequestVoteRequest) (*RequestVoteResponse, error)
 	mustEmbedUnimplementedRaftServiceServer()
 }
 
@@ -62,8 +75,11 @@ type RaftServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedRaftServiceServer struct{}
 
-func (UnimplementedRaftServiceServer) SendAppendEntries(context.Context, *AppendEntriesRequest) (*AppendEntriesResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SendAppendEntries not implemented")
+func (UnimplementedRaftServiceServer) AppendEntries(context.Context, *AppendEntriesRequest) (*AppendEntriesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AppendEntries not implemented")
+}
+func (UnimplementedRaftServiceServer) RequestVote(context.Context, *RequestVoteRequest) (*RequestVoteResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RequestVote not implemented")
 }
 func (UnimplementedRaftServiceServer) mustEmbedUnimplementedRaftServiceServer() {}
 func (UnimplementedRaftServiceServer) testEmbeddedByValue()                     {}
@@ -86,20 +102,38 @@ func RegisterRaftServiceServer(s grpc.ServiceRegistrar, srv RaftServiceServer) {
 	s.RegisterService(&RaftService_ServiceDesc, srv)
 }
 
-func _RaftService_SendAppendEntries_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _RaftService_AppendEntries_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AppendEntriesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RaftServiceServer).SendAppendEntries(ctx, in)
+		return srv.(RaftServiceServer).AppendEntries(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RaftService_SendAppendEntries_FullMethodName,
+		FullMethod: RaftService_AppendEntries_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RaftServiceServer).SendAppendEntries(ctx, req.(*AppendEntriesRequest))
+		return srv.(RaftServiceServer).AppendEntries(ctx, req.(*AppendEntriesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RaftService_RequestVote_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RequestVoteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RaftServiceServer).RequestVote(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RaftService_RequestVote_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RaftServiceServer).RequestVote(ctx, req.(*RequestVoteRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -108,12 +142,16 @@ func _RaftService_SendAppendEntries_Handler(srv interface{}, ctx context.Context
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var RaftService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "main.RaftService",
+	ServiceName: "rpc.RaftService",
 	HandlerType: (*RaftServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "SendAppendEntries",
-			Handler:    _RaftService_SendAppendEntries_Handler,
+			MethodName: "AppendEntries",
+			Handler:    _RaftService_AppendEntries_Handler,
+		},
+		{
+			MethodName: "RequestVote",
+			Handler:    _RaftService_RequestVote_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
