@@ -3,7 +3,7 @@ package cfg
 import "strconv"
 
 type ServerIdentity struct {
-	Id          string
+	Id          NodeId
 	Port        int
 	BaseAddress string
 }
