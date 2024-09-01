@@ -3,7 +3,8 @@ package state
 type ServerRole int
 
 const (
-	Leader ServerRole = iota
+	_ ServerRole = iota
+	Leader
 	Follower
 	Candidate
 )

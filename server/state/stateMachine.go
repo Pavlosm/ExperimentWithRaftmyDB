@@ -3,6 +3,7 @@ package state
 import (
 	"fmt"
 	"myDb/server/cfg"
+	"myDb/server/rpc"
 )
 
 type StateMachine struct {
@@ -84,4 +85,19 @@ func (s *StateMachine) requestVoteLogOk(lt int64, li int64) bool {
 	lastLog := s.LogState.Log[len(s.LogState.Log)-1]
 
 	return lt > lastLog.Term || (lt == lastLog.Term && li == lastLog.Index)
+}
+
+func (s *StateMachine) appendEntriesToLog(r *rpc.AppendEntriesRequest) {
+
+	for _, e := range r.Entries {
+		s.LogState.Log = append(s.LogState.Log, Log{
+			Term:    e.Term,
+			Index:   e.Index,
+			Command: e.Command,
+		})
+	}
+}
+
+func (s *StateMachine) GetCurrentTerm() int64 {
+	return s.ServerVars.CurrentTerm
 }

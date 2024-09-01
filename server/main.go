@@ -22,7 +22,7 @@ func main() {
 
 	m := make(map[cfg.NodeId]cfg.ServerIdentity)
 
-	for i := 1; i <= 3; i++ {
+	for i := 1; i <= 2; i++ {
 		sId := cfg.NodeId(strconv.Itoa(i))
 		m[sId] = cfg.ServerIdentity{
 			Id:          sId,
@@ -33,26 +33,35 @@ func main() {
 
 	myId := cfg.NodeId(os.Args[1])
 
+	fmt.Println(myId)
 	sc := cfg.NewServerConfig(myId, m)
 
-	s := NewRpcServer(sc)
+	c := make(chan int)
 
-	go startServer(s, int32(sc.Me.Port))
+	req := make(chan *rpc.RequestVoteRequest)
+	res := make(chan *rpc.RequestVoteResponse)
+	areq := make(chan *rpc.AppendEntriesRequest)
+	ares := make(chan *rpc.AppendEntriesResponse)
+	s, st := NewRpcServer(sc, c, req, res)
 
-	startPing(sc, s)
+	go startServer(s, int32(sc.Me.Port), req, res, areq, ares)
+
+	startPing(sc, st)
+
+	//_ := make([]string, 0, 1000)
 }
 
-func startPing(sc cfg.ServerConfig, s *rpcServer.RpcServer) {
+func startPing(sc cfg.ServerConfig, st state.StateMachine) {
 	am := make(map[cfg.NodeId]*string)
 	for {
-		time.Sleep(8 * time.Second)
+		time.Sleep(15 * time.Second)
 		for _, server := range sc.Servers {
 
-			fmt.Println("abut to ping ", server.GetUrl())
+			log.Println("about to ping ", server.GetUrl())
 
-			i, t := s.State.LogState.LastLogProps()
+			i, t := st.LogState.LastLogProps()
 			a := rpc.RequestVoteRequest{
-				Term:         s.State.ServerVars.CurrentTerm,
+				Term:         st.ServerVars.CurrentTerm,
 				CandidateId:  string(sc.Me.Id),
 				LastLogIndex: i,
 				LastLogTerm:  t,
@@ -83,30 +92,48 @@ func startPing(sc cfg.ServerConfig, s *rpcServer.RpcServer) {
 	}
 }
 
-func startServer(rs *rpcServer.RpcServer, p int32) {
-	flag.Parse()
-	fmt.Println(p)
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", p))
-	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
-	}
-	s := grpc.NewServer()
+func startServer(
+	rs *rpcServer.RpcServer,
+	p int32,
+	r chan *rpc.RequestVoteRequest,
+	vres chan *rpc.RequestVoteResponse,
+	a chan *rpc.AppendEntriesRequest,
+	ares chan *rpc.AppendEntriesResponse) {
 
-	rpc.RegisterRaftServiceServer(s, rs)
-	fmt.Printf("server listening at %v", lis.Addr())
-	if err := s.Serve(lis); err != nil {
-		fmt.Printf("failed to serve: %v", err)
-	}
-}
+	go func() {
+		flag.Parse()
 
-func NewRpcServer(c cfg.ServerConfig) *rpcServer.RpcServer {
-	sv := make([]cfg.NodeId, len(c.Servers))
-	for _, id := range c.Servers {
-		sv = append(sv, id.Id)
-	}
-	s := state.NewDefaultStateMachine(sv)
-	s.ServerConfig = c
-	return &rpcServer.RpcServer{
-		State: s,
+		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", p))
+		if err != nil {
+			log.Fatalf("failed to listen: %v", err)
+		}
+		s := grpc.NewServer()
+
+		rpc.RegisterRaftServiceServer(s, rs)
+		fmt.Printf("server listening at %v", lis.Addr())
+		if err := s.Serve(lis); err != nil {
+			fmt.Printf("failed to serve: %v", err)
+		}
+	}()
+
+	for {
+		select {
+		case in := <-r:
+			log.Println("MAIN: received request vote request")
+			granted := rs.State.HandleVoteRequest(
+				in.CandidateId,
+				in.Term,
+				in.LastLogTerm,
+				in.LastLogIndex)
+			log.Println("MAIN: handled request vote request")
+			resp := &rpc.RequestVoteResponse{
+				Term:        rs.State.GetCurrentTerm(),
+				VoteGranted: granted,
+			}
+			vres <- resp
+			log.Println("MAIN: sent to response channel")
+		case in := <-a:
+			fmt.Println("Not supported", in)
+		}
 	}
 }
