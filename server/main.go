@@ -1,12 +1,12 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"log"
 	"myDb/server/cfg"
 	"myDb/server/rpc"
+	"myDb/server/rpcClient"
 	"myDb/server/rpcServer"
 	"myDb/server/state"
 	"net"
@@ -15,11 +15,16 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
-func main() {
+var sc cfg.ServerConfig
+var c FlowControlChannels
+var s rpcServer.RpcServer
+var st state.StateMachine
+var tm TimeoutMod
+var rc rpcClient.RpcClient
 
+func main() {
 	m := make(map[cfg.NodeId]cfg.ServerIdentity)
 
 	for i := 1; i <= 2; i++ {
@@ -34,106 +39,116 @@ func main() {
 	myId := cfg.NodeId(os.Args[1])
 
 	fmt.Println(myId)
-	sc := cfg.NewServerConfig(myId, m)
 
-	c := make(chan int)
+	sc = cfg.NewServerConfig(myId, m)
 
-	req := make(chan *rpc.RequestVoteRequest)
-	res := make(chan *rpc.RequestVoteResponse)
-	areq := make(chan *rpc.AppendEntriesRequest)
-	ares := make(chan *rpc.AppendEntriesResponse)
-	s, st := NewRpcServer(sc, c, req, res)
+	c = NewFlowControlChannels()
 
-	go startServer(s, int32(sc.Me.Port), req, res, areq, ares)
+	server, stateMachine := NewRpcServer(sc, &c)
+	s = *server
+	st = *stateMachine
 
-	startPing(sc, st)
+	tm = *NewTimeoutMod()
 
-	//_ := make([]string, 0, 1000)
+	rc = *rpcClient.NewRpcClient(sc)
+
+	go startServer()
+
+	quit := make(chan int)
+	<-quit
 }
 
-func startPing(sc cfg.ServerConfig, st state.StateMachine) {
-	am := make(map[cfg.NodeId]*string)
+func startServer() {
+
+	go startRpcServer()
+
+	go tm.Start()
+
+	go appendEntriesPing()
+
 	for {
-		time.Sleep(15 * time.Second)
-		for _, server := range sc.Servers {
+		select {
+		case v := <-c.VoteCmdChan:
+			log.Println("MAIN: received vote request from", v.Data.CandidateId)
 
-			log.Println("about to ping ", server.GetUrl())
+			granted := st.HandleVoteRequest(
+				v.Data.CandidateId,
+				v.Data.Term,
+				v.Data.LastLogTerm,
+				v.Data.LastLogIndex)
 
-			i, t := st.LogState.LastLogProps()
-			a := rpc.RequestVoteRequest{
-				Term:         st.ServerVars.CurrentTerm,
-				CandidateId:  string(sc.Me.Id),
-				LastLogIndex: i,
-				LastLogTerm:  t,
+			vr := &rpc.RequestVoteResponse{
+				Term:        st.GetCurrentTerm(),
+				VoteGranted: granted,
+			}
+			v.Reply <- vr
+			if st.ServerVars.Role == state.Leader {
+				tm.StopChan <- true
+			}
+			log.Println("MAIN: sent vote response", granted, "to", v.Data.CandidateId)
+		case a := <-c.AppendEntriesCmdChan:
+			log.Println("MAIN: received vote request from", a.Data.LeaderId, "with term", a.Data.Term, ". My term is", st.ServerVars.CurrentTerm)
+
+			st.HandleAppendEntriesRequest(a.Data.Term)
+
+			ar := &rpc.AppendEntriesResponse{
+				Term:       st.GetCurrentTerm(),
+				Success:    true,
+				MatchIndex: 1,
+			}
+			a.Reply <- ar
+
+			if st.ServerVars.Role == state.Leader {
+				tm.StopChan <- true
+			} else {
+				tm.ResetChan <- true
 			}
 
-			addr, ok := am[server.Id]
-			if !ok {
-				addr = flag.String("addr"+string(server.Id), server.GetUrl(), "the server to send")
-				am[server.Id] = addr
+			log.Println("MAIN: handled AppendEntries request from", a.Data.LeaderId, "with term", a.Data.Term, ". My term is", st.ServerVars.CurrentTerm)
+		case _, ok := <-tm.FireChan:
+			log.Println("MAIN: expiry timer fired")
+			if ok {
+				st.ServerVars.Role = state.Candidate
+				// TODO start voting process processing for
 			}
-
-			conn, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-			if err != nil {
-				fmt.Println("did not connect:", err)
-			}
-			defer conn.Close()
-			c := rpc.NewRaftServiceClient(conn)
-
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-
-			r, err := c.RequestVote(ctx, &a)
-			if err != nil {
-				fmt.Println("Could not contact server", server.Id, "with error:", err)
-			}
-			fmt.Println(r)
+			tm.ResetChan <- true
 		}
 	}
 }
 
-func startServer(
-	rs *rpcServer.RpcServer,
-	p int32,
-	r chan *rpc.RequestVoteRequest,
-	vres chan *rpc.RequestVoteResponse,
-	a chan *rpc.AppendEntriesRequest,
-	ares chan *rpc.AppendEntriesResponse) {
+func startRpcServer() {
+	flag.Parse()
 
-	go func() {
-		flag.Parse()
+	p := int32(sc.Me.Port)
 
-		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", p))
-		if err != nil {
-			log.Fatalf("failed to listen: %v", err)
-		}
-		s := grpc.NewServer()
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", p))
+	if err != nil {
+		log.Fatalf("failed to listen: %v", err)
+	}
+	gs := grpc.NewServer()
 
-		rpc.RegisterRaftServiceServer(s, rs)
-		fmt.Printf("server listening at %v", lis.Addr())
-		if err := s.Serve(lis); err != nil {
-			fmt.Printf("failed to serve: %v", err)
-		}
-	}()
+	rpc.RegisterRaftServiceServer(gs, &s)
+	log.Printf("MAIN: server listening at %v\n", lis.Addr())
 
+	if err := gs.Serve(lis); err != nil {
+		log.Printf("MAIN: failed to serve: %v\n", err)
+	}
+}
+
+func appendEntriesPing() {
 	for {
-		select {
-		case in := <-r:
-			log.Println("MAIN: received request vote request")
-			granted := rs.State.HandleVoteRequest(
-				in.CandidateId,
-				in.Term,
-				in.LastLogTerm,
-				in.LastLogIndex)
-			log.Println("MAIN: handled request vote request")
-			resp := &rpc.RequestVoteResponse{
-				Term:        rs.State.GetCurrentTerm(),
-				VoteGranted: granted,
-			}
-			vres <- resp
-			log.Println("MAIN: sent to response channel")
-		case in := <-a:
-			fmt.Println("Not supported", in)
+		time.Sleep(2 * time.Second)
+		i, t := st.LogState.LastLogProps()
+
+		a := rpc.AppendEntriesRequest{
+			Term:         st.ServerVars.CurrentTerm,
+			LeaderId:     string(sc.Me.Id),
+			PrevLogIndex: i,
+			PrevLogTerm:  t,
+			LeaderCommit: 0,
+			Entries:      make([]*rpc.Entry, 0),
 		}
+
+		rc.SendAppendEntries(&a)
 	}
 }

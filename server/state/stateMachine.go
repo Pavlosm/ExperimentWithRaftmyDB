@@ -59,6 +59,10 @@ func (s *StateMachine) HandleVoteRequest(cId string, t int64, lt int64, li int64
 	return grant
 }
 
+func (s *StateMachine) HandleAppendEntriesRequest(t int64) {
+
+}
+
 func (s *StateMachine) updateTerm(t int64) {
 	if t <= s.ServerVars.CurrentTerm {
 		return
