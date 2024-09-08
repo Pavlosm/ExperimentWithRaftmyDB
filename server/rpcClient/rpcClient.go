@@ -3,7 +3,7 @@ package rpcClient
 import (
 	"context"
 	"flag"
-	"fmt"
+	"log"
 	"myDb/server/cfg"
 	"myDb/server/rpc"
 	"time"
@@ -30,7 +30,7 @@ func NewRpcClient(sc cfg.ServerConfig) *RpcClient {
 		conn, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 
 		if err != nil {
-			fmt.Println("did not connect:", err)
+			log.Println("did not connect:", err)
 		}
 
 		c[server.Id] = rpc.NewRaftServiceClient(conn)
@@ -41,7 +41,7 @@ func NewRpcClient(sc cfg.ServerConfig) *RpcClient {
 	}
 }
 
-func (r *RpcClient) SendAppendEntries(a *rpc.AppendEntriesRequest) {
+func (r *RpcClient) SendAppendEntries(a *rpc.AppendEntriesRequest, reply chan<- *rpc.AppendEntriesResponse, errC chan<- error) {
 	for id, c := range r.Clients {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -50,10 +50,31 @@ func (r *RpcClient) SendAppendEntries(a *rpc.AppendEntriesRequest) {
 			r, err := c.AppendEntries(ctx, a)
 
 			if err != nil {
-				fmt.Println("Could not contact server", id, "with error:", err)
+				log.Println("Could not contact server", id, "with error:", err)
+				errC <- err
+				return
 			}
 
-			fmt.Println(r)
+			reply <- r
+		}()
+	}
+}
+
+func (r *RpcClient) SendVoteRequests(a *rpc.RequestVoteRequest, reply chan<- *rpc.RequestVoteResponse, errC chan<- error) {
+	for id, c := range r.Clients {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
+			r, err := c.RequestVote(ctx, a)
+
+			if err != nil {
+				log.Println("Could not contact server", id, "with error:", err)
+				errC <- err
+				return
+			}
+
+			reply <- r
 		}()
 	}
 }

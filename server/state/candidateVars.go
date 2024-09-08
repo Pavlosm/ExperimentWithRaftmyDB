@@ -14,3 +14,15 @@ func NewDefaultCandidateVars() CandidateVars {
 		VotesGranted: make(map[cfg.NodeId]bool),
 	}
 }
+
+func (c CandidateVars) Reset(t int64) {
+	c.Term = t
+
+	for ni := range c.RequestVotes {
+		delete(c.RequestVotes, ni)
+	}
+
+	for ni := range c.RequestVotes {
+		delete(c.VotesGranted, ni)
+	}
+}

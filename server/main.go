@@ -12,7 +12,6 @@ import (
 	"net"
 	"os"
 	"strconv"
-	"time"
 
 	"google.golang.org/grpc"
 )
@@ -20,8 +19,7 @@ import (
 var sc cfg.ServerConfig
 var c FlowControlChannels
 var s rpcServer.RpcServer
-var st state.StateMachine
-var tm TimeoutMod
+var st state.StateMachineHandler
 var rc rpcClient.RpcClient
 
 func main() {
@@ -46,10 +44,7 @@ func main() {
 
 	server, stateMachine := NewRpcServer(sc, &c)
 	s = *server
-	st = *stateMachine
-
-	tm = *NewTimeoutMod()
-
+	st = stateMachine
 	rc = *rpcClient.NewRpcClient(sc)
 
 	go startServer()
@@ -62,56 +57,64 @@ func startServer() {
 
 	go startRpcServer()
 
-	go tm.Start()
-
-	go appendEntriesPing()
+	st.Start()
 
 	for {
 		select {
-		case v := <-c.VoteCmdChan:
-			log.Println("MAIN: received vote request from", v.Data.CandidateId)
-
+		case v := <-c.VoteCmd: // external command
+			log.Println("MAIN: received vote request from", v.Data.ServerId)
 			granted := st.HandleVoteRequest(
-				v.Data.CandidateId,
+				v.Data.ServerId,
 				v.Data.Term,
 				v.Data.LastLogTerm,
 				v.Data.LastLogIndex)
 
-			vr := &rpc.RequestVoteResponse{
+			v.Reply <- &rpc.RequestVoteResponse{
+				ServerId:    st.GetServerIdString(),
 				Term:        st.GetCurrentTerm(),
 				VoteGranted: granted,
 			}
-			v.Reply <- vr
-			if st.ServerVars.Role == state.Leader {
-				tm.StopChan <- true
-			}
-			log.Println("MAIN: sent vote response", granted, "to", v.Data.CandidateId)
-		case a := <-c.AppendEntriesCmdChan:
-			log.Println("MAIN: received vote request from", a.Data.LeaderId, "with term", a.Data.Term, ". My term is", st.ServerVars.CurrentTerm)
-
+			log.Println("MAIN: sent vote response", granted, "to", v.Data.ServerId)
+		case a := <-c.AppendEntriesCmd: // external command
+			log.Println("MAIN: received AppendEntries request from", a.Data.ServerId, "with term", a.Data.Term, ". My term is", st.GetCurrentTerm())
 			st.HandleAppendEntriesRequest(a.Data.Term)
-
-			ar := &rpc.AppendEntriesResponse{
+			a.Reply <- &rpc.AppendEntriesResponse{
+				ServerId:   st.GetServerIdString(),
 				Term:       st.GetCurrentTerm(),
 				Success:    true,
 				MatchIndex: 1,
 			}
-			a.Reply <- ar
-
-			if st.ServerVars.Role == state.Leader {
-				tm.StopChan <- true
-			} else {
-				tm.ResetChan <- true
+			log.Println("MAIN: handled AppendEntries request from", a.Data.ServerId, "with term", a.Data.Term, ". My term is", st.GetCurrentTerm())
+		case m := <-c.VoteReply: // response from request command
+			log.Println("New vote from", m.ServerId, "for term,", m.Term, "with value", m.VoteGranted)
+			st.HandleVoteResponse(m.ServerId, m.VoteGranted, m.Term)
+		case t := <-st.GetVoteFireChan(): // internal command
+			log.Println("MAIN: expiry timer fired. time:", t)
+			if st.HandleVoteTimerFired() {
+				i, t := st.GetLastLogProps()
+				rc.SendVoteRequests(&rpc.RequestVoteRequest{
+					Term:         st.GetCurrentTerm(),
+					ServerId:     st.GetServerIdString(),
+					LastLogIndex: i,
+					LastLogTerm:  t,
+				}, c.VoteReply, c.Err)
 			}
-
-			log.Println("MAIN: handled AppendEntries request from", a.Data.LeaderId, "with term", a.Data.Term, ". My term is", st.ServerVars.CurrentTerm)
-		case _, ok := <-tm.FireChan:
-			log.Println("MAIN: expiry timer fired")
-			if ok {
-				st.ServerVars.Role = state.Candidate
-				// TODO start voting process processing for
-			}
-			tm.ResetChan <- true
+		case tm := <-st.GetPingFireChan():
+			log.Println("MAIN: expiry timer fired. time:", tm)
+			i, t := st.GetLastLogProps()
+			rc.SendAppendEntries(&rpc.AppendEntriesRequest{
+				Term:         st.GetCurrentTerm(),
+				ServerId:     st.GetServerIdString(),
+				PrevLogIndex: i,
+				PrevLogTerm:  t,
+				LeaderCommit: 0,
+				Entries:      make([]*rpc.Entry, 0),
+			}, c.AppendEntriesReply, c.Err)
+			st.HandlePingRequestSent()
+		case a := <-c.AppendEntriesReply:
+			log.Println("Received append entries reply", a)
+		case e := <-c.Err:
+			log.Println("An error ocurred", e)
 		}
 	}
 }
@@ -132,23 +135,5 @@ func startRpcServer() {
 
 	if err := gs.Serve(lis); err != nil {
 		log.Printf("MAIN: failed to serve: %v\n", err)
-	}
-}
-
-func appendEntriesPing() {
-	for {
-		time.Sleep(2 * time.Second)
-		i, t := st.LogState.LastLogProps()
-
-		a := rpc.AppendEntriesRequest{
-			Term:         st.ServerVars.CurrentTerm,
-			LeaderId:     string(sc.Me.Id),
-			PrevLogIndex: i,
-			PrevLogTerm:  t,
-			LeaderCommit: 0,
-			Entries:      make([]*rpc.Entry, 0),
-		}
-
-		rc.SendAppendEntries(&a)
 	}
 }

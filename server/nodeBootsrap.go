@@ -14,7 +14,7 @@ func NewRpcServer(sc cfg.ServerConfig, c *FlowControlChannels) (*rpcServer.RpcSe
 	s := state.NewDefaultStateMachine(sv)
 	s.ServerConfig = sc
 	return &rpcServer.RpcServer{
-		VoteCmdChan:          c.VoteCmdChan,
-		AppendEntriesCmdChan: c.AppendEntriesCmdChan,
+		VoteCmdChan:          c.VoteCmd,
+		AppendEntriesCmdChan: c.AppendEntriesCmd,
 	}, &s
 }
