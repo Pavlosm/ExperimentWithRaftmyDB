@@ -24,3 +24,7 @@ func NewServerConfig(myId NodeId, m map[NodeId]ServerIdentity) ServerConfig {
 
 	return sc
 }
+
+func (s *ServerConfig) MajorityNum() int {
+	return (len(s.Servers) / 2) + 1
+}

@@ -11,3 +11,7 @@ type ServerIdentity struct {
 func (s ServerIdentity) GetUrl() string {
 	return s.BaseAddress + ":" + strconv.Itoa(s.Port)
 }
+
+func (s ServerIdentity) MyNameString() string {
+	return string(s.Id)
+}

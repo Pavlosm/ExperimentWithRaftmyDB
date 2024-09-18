@@ -6,17 +6,23 @@ import (
 	"log"
 	"myDb/server/cfg"
 	"myDb/server/rpc"
+	"myDb/server/utils"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-type RpcClient struct {
+type ConcreteRpcClient struct {
 	Clients map[cfg.NodeId]rpc.RaftServiceClient
 }
 
-func NewRpcClient(sc cfg.ServerConfig) *RpcClient {
+type RpcClient interface {
+	SendAppendEntries(a *rpc.AppendEntriesRequest, reply chan<- *rpc.AppendEntriesResponse, errC chan<- error)
+	SendVoteRequests(a *rpc.RequestVoteRequest, reply chan<- *rpc.RequestVoteResponse, errC chan<- error)
+}
+
+func NewRpcClient(sc cfg.ServerConfig) RpcClient {
 	c := make(map[cfg.NodeId]rpc.RaftServiceClient)
 
 	for _, server := range sc.Servers {
@@ -30,29 +36,36 @@ func NewRpcClient(sc cfg.ServerConfig) *RpcClient {
 		conn, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 
 		if err != nil {
-			log.Println("did not connect:", err)
+			log.Printf("%s %s\n", utils.Red()("RPC Client: did not connect"), utils.Red()(err))
 		}
 
 		c[server.Id] = rpc.NewRaftServiceClient(conn)
 	}
 
-	return &RpcClient{
+	for k := range c {
+		log.Println("Created client for", k)
+	}
+
+	return &ConcreteRpcClient{
 		Clients: c,
 	}
 }
 
-func (r *RpcClient) SendAppendEntries(a *rpc.AppendEntriesRequest, reply chan<- *rpc.AppendEntriesResponse, errC chan<- error) {
+func (r *ConcreteRpcClient) SendAppendEntries(a *rpc.AppendEntriesRequest, reply chan<- *rpc.AppendEntriesResponse, errC chan<- error) {
 	for id, c := range r.Clients {
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
 
-			r, err := c.AppendEntries(ctx, a)
-
-			if err != nil {
-				log.Println("Could not contact server", id, "with error:", err)
-				errC <- err
-				return
+			var r *rpc.AppendEntriesResponse
+			var err error
+			for {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				r, err = c.AppendEntries(ctx, a)
+				if err == nil {
+					break
+				}
+				log.Printf("%s %s %s %s\n", utils.Red()("RPC Client: SendAppendEntries could not contact server"), utils.Red()(id), utils.Red()("with error:"), utils.Red()(err))
+				time.Sleep(time.Second)
 			}
 
 			reply <- r
@@ -60,18 +73,23 @@ func (r *RpcClient) SendAppendEntries(a *rpc.AppendEntriesRequest, reply chan<- 
 	}
 }
 
-func (r *RpcClient) SendVoteRequests(a *rpc.RequestVoteRequest, reply chan<- *rpc.RequestVoteResponse, errC chan<- error) {
+func (r *ConcreteRpcClient) SendVoteRequests(a *rpc.RequestVoteRequest, reply chan<- *rpc.RequestVoteResponse, errC chan<- error) {
 	for id, c := range r.Clients {
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
 
-			r, err := c.RequestVote(ctx, a)
+			var r *rpc.RequestVoteResponse
+			var err error
+			for {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				r, err = c.RequestVote(ctx, a)
 
-			if err != nil {
-				log.Println("Could not contact server", id, "with error:", err)
-				errC <- err
-				return
+				if err == nil {
+					break
+				}
+
+				log.Printf("%s %s %s %s %s\n", utils.Red()("RPC Client: could not contact server"), utils.Red()(id), utils.Red()("with error:"), utils.Red()(err), utils.Red()(". Waiting for 2' before retry"))
+				time.Sleep(5 * time.Second)
 			}
 
 			reply <- r

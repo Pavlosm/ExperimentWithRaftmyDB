@@ -4,11 +4,15 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"myDb/server/cfg"
+	"myDb/server/environment"
+	"myDb/server/logging"
 	"myDb/server/rpc"
 	"myDb/server/rpcClient"
 	"myDb/server/rpcServer"
 	"myDb/server/state"
+	"myDb/server/utils"
 	"net"
 	"os"
 	"strconv"
@@ -17,7 +21,7 @@ import (
 )
 
 var sc cfg.ServerConfig
-var c FlowControlChannels
+var e *environment.Env
 var s rpcServer.RpcServer
 var st state.StateMachineHandler
 var rc rpcClient.RpcClient
@@ -25,7 +29,7 @@ var rc rpcClient.RpcClient
 func main() {
 	m := make(map[cfg.NodeId]cfg.ServerIdentity)
 
-	for i := 1; i <= 2; i++ {
+	for i := 1; i <= 3; i++ {
 		sId := cfg.NodeId(strconv.Itoa(i))
 		m[sId] = cfg.ServerIdentity{
 			Id:          sId,
@@ -40,12 +44,12 @@ func main() {
 
 	sc = cfg.NewServerConfig(myId, m)
 
-	c = NewFlowControlChannels()
+	e = environment.NewEnvironment()
 
-	server, stateMachine := NewRpcServer(sc, &c)
+	server, stateMachine := NewRpcServer(sc, e)
 	s = *server
 	st = stateMachine
-	rc = *rpcClient.NewRpcClient(sc)
+	rc = rpcClient.NewRpcClient(sc)
 
 	go startServer()
 
@@ -61,8 +65,9 @@ func startServer() {
 
 	for {
 		select {
-		case v := <-c.VoteCmd: // external command
-			log.Println("MAIN: received vote request from", v.Data.ServerId)
+		case v := <-e.Channels.VoteCmd: // external command
+			info("received vote request", v.Data.ServerId, "", "")
+
 			granted := st.HandleVoteRequest(
 				v.Data.ServerId,
 				v.Data.Term,
@@ -74,22 +79,24 @@ func startServer() {
 				Term:        st.GetCurrentTerm(),
 				VoteGranted: granted,
 			}
-			log.Println("MAIN: sent vote response", granted, "to", v.Data.ServerId)
-		case a := <-c.AppendEntriesCmd: // external command
-			log.Println("MAIN: received AppendEntries request from", a.Data.ServerId, "with term", a.Data.Term, ". My term is", st.GetCurrentTerm())
+
+			info("sent vote response", "", v.Data.ServerId, "")
+		case a := <-e.Channels.AppendEntriesCmd: // external command
+			slog.Info("received AppendEntries request", "from", a.Data.ServerId, "myTerm", st.GetCurrentTerm(), "mTerm", a.Data.Term)
 			st.HandleAppendEntriesRequest(a.Data.Term)
+			slog.Info("handled AppendEntries request, sending reply to channel", "from", a.Data.ServerId)
 			a.Reply <- &rpc.AppendEntriesResponse{
 				ServerId:   st.GetServerIdString(),
 				Term:       st.GetCurrentTerm(),
 				Success:    true,
 				MatchIndex: 1,
 			}
-			log.Println("MAIN: handled AppendEntries request from", a.Data.ServerId, "with term", a.Data.Term, ". My term is", st.GetCurrentTerm())
-		case m := <-c.VoteReply: // response from request command
-			log.Println("New vote from", m.ServerId, "for term,", m.Term, "with value", m.VoteGranted)
+			slog.Info("handled AppendEntries request", logging.From, a.Data.ServerId, logging.MessageTerm, a.Data.Term, logging.MyTerm, st.GetCurrentTerm())
+		case m := <-e.Channels.VoteReply: // response from request command
+			log.Printf("%s %s %s %s %s %s\n", utils.Yellow()("MAIN: New vote from"), utils.Yellow()(m.ServerId), utils.Yellow()("for term,"), utils.Yellow()(m.Term), utils.Yellow()("with value"), utils.Yellow()(m.VoteGranted))
 			st.HandleVoteResponse(m.ServerId, m.VoteGranted, m.Term)
 		case t := <-st.GetVoteFireChan(): // internal command
-			log.Println("MAIN: expiry timer fired. time:", t)
+			log.Printf("%s %s\n", utils.Red()("MAIN: expiry timer fired. time:"), t)
 			if st.HandleVoteTimerFired() {
 				i, t := st.GetLastLogProps()
 				rc.SendVoteRequests(&rpc.RequestVoteRequest{
@@ -97,7 +104,7 @@ func startServer() {
 					ServerId:     st.GetServerIdString(),
 					LastLogIndex: i,
 					LastLogTerm:  t,
-				}, c.VoteReply, c.Err)
+				}, e.Channels.VoteReply, e.Channels.Err)
 			}
 		case tm := <-st.GetPingFireChan():
 			log.Println("MAIN: expiry timer fired. time:", tm)
@@ -109,11 +116,11 @@ func startServer() {
 				PrevLogTerm:  t,
 				LeaderCommit: 0,
 				Entries:      make([]*rpc.Entry, 0),
-			}, c.AppendEntriesReply, c.Err)
+			}, e.Channels.AppendEntriesReply, e.Channels.Err)
 			st.HandlePingRequestSent()
-		case a := <-c.AppendEntriesReply:
+		case a := <-e.Channels.AppendEntriesReply:
 			log.Println("Received append entries reply", a)
-		case e := <-c.Err:
+		case e := <-e.Channels.Err:
 			log.Println("An error ocurred", e)
 		}
 	}
@@ -136,4 +143,31 @@ func startRpcServer() {
 	if err := gs.Serve(lis); err != nil {
 		log.Printf("MAIN: failed to serve: %v\n", err)
 	}
+}
+
+func info(msg string, from string, to string, mTerm string, args ...any) {
+
+	if len(from) > 0 {
+		args = append(args, logging.From)
+		args = append(args, from)
+	}
+
+	if len(to) > 0 {
+		args = append(args, logging.To)
+		args = append(args, to)
+	}
+
+	if len(mTerm) > 0 {
+		args = append(args, logging.MessageTerm)
+		args = append(args, mTerm)
+	}
+
+	args = append(args, logging.Me)
+	args = append(args, sc.Me.Id)
+	args = append(args, logging.Url)
+	args = append(args, sc.Me.BaseAddress)
+	args = append(args, logging.MyTerm)
+	args = append(args, st.GetCurrentTerm())
+
+	slog.Info(msg, args...)
 }

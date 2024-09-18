@@ -2,7 +2,6 @@ package rpcServer
 
 import (
 	"context"
-	"log"
 	"myDb/server/rpc"
 	"myDb/server/utils"
 )
@@ -15,8 +14,6 @@ type RpcServer struct {
 
 func (s *RpcServer) AppendEntries(ctx context.Context, in *rpc.AppendEntriesRequest) (*rpc.AppendEntriesResponse, error) {
 
-	log.Println("RPC Server: received request vote request")
-
 	req := utils.WithReplyChan[*rpc.AppendEntriesRequest, *rpc.AppendEntriesResponse]{
 		Data:  in,
 		Reply: make(chan *rpc.AppendEntriesResponse),
@@ -24,11 +21,7 @@ func (s *RpcServer) AppendEntries(ctx context.Context, in *rpc.AppendEntriesRequ
 
 	s.AppendEntriesCmdChan <- req
 
-	log.Println("RPC Server: sent to channel")
-
 	r := <-req.Reply
-
-	log.Println("RPC Server: got response from channel")
 
 	return r, nil
 
@@ -61,15 +54,12 @@ func (s *RpcServer) AppendEntries(ctx context.Context, in *rpc.AppendEntriesRequ
 
 func (s *RpcServer) RequestVote(ctx context.Context, in *rpc.RequestVoteRequest) (*rpc.RequestVoteResponse, error) {
 
-	// log.Println("RPC Server: received request vote request")
 	req := utils.WithReplyChan[*rpc.RequestVoteRequest, *rpc.RequestVoteResponse]{
 		Data:  in,
 		Reply: make(chan *rpc.RequestVoteResponse),
 	}
 
 	s.VoteCmdChan <- req
-	// log.Println("RPC Server: sent to channel")
 	r := <-req.Reply
-	// log.Println("RPC Server: got response from channel")
 	return r, nil
 }

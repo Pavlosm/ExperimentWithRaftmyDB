@@ -1,8 +1,9 @@
 package state
 
 import (
-	"log"
+	"log/slog"
 	"math/rand"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -20,6 +21,7 @@ type ConcreteTimer struct {
 type TimerConf struct {
 	MinMs int
 	MaxMs int
+	Name  string
 }
 
 type Timer interface {
@@ -38,7 +40,7 @@ func NewTimeoutMod(cfg TimerConf) Timer {
 	r := rand.New(rand.NewSource(int64(time.Now().Nanosecond())))
 	return &ConcreteTimer{
 		Rand:      r,
-		Timer:     time.NewTimer(30 * time.Second),
+		Timer:     time.NewTimer(60 * time.Second),
 		ResetChan: rc,
 		StopChan:  sc,
 		Cfg:       cfg,
@@ -70,15 +72,15 @@ func (t *ConcreteTimer) Start() {
 }
 
 func (t *ConcreteTimer) Reset() {
-	t.Timer.Reset(t.getExpiry())
-	log.Println("TIMER: reset")
+	d := t.getExpiry()
+	t.Timer.Reset(d)
+	t.debugL("reset" + "timer duration set to" + d.String())
 }
 
 func (t *ConcreteTimer) Stop() {
-	if !t.Timer.Stop() {
+	if t.Timer.Stop() {
 		<-t.C
 	}
-	log.Println("TIMER: stopped")
 }
 
 func (t *ConcreteTimer) GetResetChan() chan<- bool {
@@ -100,8 +102,13 @@ func (t *ConcreteTimer) getExpiry() time.Duration {
 	}
 
 	x := t.Cfg.MaxMs - t.Cfg.MinMs
-	ms := t.Rand.Int63n(int64(x) + int64(t.Cfg.MinMs))
+	ms := t.Rand.Int63n(int64(x)) + int64(t.Cfg.MinMs)
 	d := time.Millisecond * time.Duration(ms)
-	log.Println("Timer duration set to", d.String())
+
 	return d
+}
+
+func (t *ConcreteTimer) debugL(msg string) {
+	s := t.Cfg.Name + msg + "(" + strconv.Itoa(t.Cfg.MinMs) + "-" + strconv.Itoa(t.Cfg.MaxMs) + ")"
+	slog.Debug(s)
 }
