@@ -1,0 +1,57 @@
+edition = "2023";
+
+option features.field_presence = IMPLICIT;
+option go_package = "myDb/rpc";
+
+package rpc;
+
+service RaftService {
+    rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse) {}
+    rpc RequestVote(RequestVoteRequest) returns (RequestVoteResponse) {}
+    rpc SendCommand(CommandRequest) returns (CommandResponse) {}
+}
+
+message AppendEntriesRequest {
+  int64 term = 1;
+  string serverId = 2;
+  int64 prevLogIndex = 3;
+  int64 prevLogTerm = 4;
+  int64 leaderCommit = 5;
+  repeated Entry entries = 6;
+}
+
+message Entry {
+  int64 Term = 1;
+  int64 Index = 2;
+  string Command = 3;
+}
+
+message AppendEntriesResponse {
+  string serverId = 1;
+  int64 term = 2;
+  bool success = 3;
+  int64 matchIndex = 4;
+  string leaderId = 5;
+}
+
+message RequestVoteRequest {
+  int64 term = 1;
+  string serverId = 2;
+  int64 lastLogIndex = 3;
+  int64 lastLogTerm = 4;
+}
+
+message RequestVoteResponse {
+  string serverId = 1;
+  int64 term = 2;
+  bool voteGranted = 3;
+}
+
+message CommandRequest {
+  string command = 1;
+}
+
+message CommandResponse {
+  bool success = 1;
+  string leaderId = 2;
+}

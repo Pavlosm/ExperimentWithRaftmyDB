@@ -2,16 +2,28 @@ package rpcServer
 
 import (
 	"context"
-	"myDb/server/rpc"
+	"myDb/rpc"
+	"myDb/server/environment"
 	"myDb/server/utils"
 )
 
 type RpcServer struct {
 	rpc.UnimplementedRaftServiceServer
-	VoteCmdChan          chan<- utils.WithReplyChan[*rpc.RequestVoteRequest, *rpc.RequestVoteResponse]
-	AppendEntriesCmdChan chan<- utils.WithReplyChan[*rpc.AppendEntriesRequest, *rpc.AppendEntriesResponse]
+	env *environment.Env
 }
 
+func (s *RpcServer) SendCommand(ctx context.Context, in *rpc.CommandRequest) (*rpc.CommandResponse, error) {
+
+	req := utils.WithReplyChan[*rpc.CommandRequest, *rpc.CommandResponse]{
+		Data:  in,
+		Reply: make(chan *rpc.CommandResponse),
+	}
+
+	s.env.Channels.CommandCmd <- req
+
+	r := <-req.Reply
+	return r, nil
+}
 func (s *RpcServer) AppendEntries(ctx context.Context, in *rpc.AppendEntriesRequest) (*rpc.AppendEntriesResponse, error) {
 
 	req := utils.WithReplyChan[*rpc.AppendEntriesRequest, *rpc.AppendEntriesResponse]{
@@ -19,37 +31,11 @@ func (s *RpcServer) AppendEntries(ctx context.Context, in *rpc.AppendEntriesRequ
 		Reply: make(chan *rpc.AppendEntriesResponse),
 	}
 
-	s.AppendEntriesCmdChan <- req
+	s.env.Channels.AppendEntriesCmd <- req
 
 	r := <-req.Reply
 
 	return r, nil
-
-	// TODO send to out channel
-	// TODO wait for response
-
-	// return &rpc.AppendEntriesResponse{
-	// 	Term:       s.State.GetCurrentTerm(),
-	// 	Success:    true,
-	// 	MatchIndex: 1,
-	// }, nil
-	// s.updateTerm(in.Term)
-
-	// logOk := in.PrevLogIndex >= 0 ||
-	// 	(in.PrevLogIndex <= int64(len(s.state.LogState.Log)) &&
-	// 		in.PrevLogTerm == int64(s.state.LogState.Log[in.PrevLogIndex].Term))
-
-	// isOk := in.Term < s.state.ServerVars.CurrentTerm ||
-	// 	(in.Term == s.state.ServerVars.CurrentTerm && !logOk && s.state.ServerVars.Role == state.Follower)
-
-	// if !isOk {
-	// 	fmt.Println("Received Append Entries from", in.LeaderId, "but log was not OK", in)
-	// 	return s.createAppendEntriesResponse(false, 0)
-	// }
-
-	// appendEntriesToLog(s.state.LogState, in.Entries)
-
-	// return s.createAppendEntriesResponse(true, 0)
 }
 
 func (s *RpcServer) RequestVote(ctx context.Context, in *rpc.RequestVoteRequest) (*rpc.RequestVoteResponse, error) {
@@ -59,7 +45,13 @@ func (s *RpcServer) RequestVote(ctx context.Context, in *rpc.RequestVoteRequest)
 		Reply: make(chan *rpc.RequestVoteResponse),
 	}
 
-	s.VoteCmdChan <- req
+	s.env.Channels.VoteCmd <- req
 	r := <-req.Reply
 	return r, nil
+}
+
+func NewRpcServer(env *environment.Env) *RpcServer {
+	return &RpcServer{
+		env: env,
+	}
 }

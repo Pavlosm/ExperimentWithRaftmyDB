@@ -4,9 +4,10 @@ import (
 	"context"
 	"flag"
 	"log"
+	"log/slog"
+	"myDb/rpc"
 	"myDb/server/cfg"
-	"myDb/server/rpc"
-	"myDb/server/utils"
+	"myDb/server/logging"
 	"time"
 
 	"google.golang.org/grpc"
@@ -36,7 +37,7 @@ func NewRpcClient(sc cfg.ServerConfig) RpcClient {
 		conn, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 
 		if err != nil {
-			log.Printf("%s %s\n", utils.Red()("RPC Client: did not connect"), utils.Red()(err))
+			slog.Error("RPC Client: did not connect", "error", err)
 		}
 
 		c[server.Id] = rpc.NewRaftServiceClient(conn)
@@ -64,7 +65,8 @@ func (r *ConcreteRpcClient) SendAppendEntries(a *rpc.AppendEntriesRequest, reply
 				if err == nil {
 					break
 				}
-				log.Printf("%s %s %s %s\n", utils.Red()("RPC Client: SendAppendEntries could not contact server"), utils.Red()(id), utils.Red()("with error:"), utils.Red()(err))
+
+				slog.Error("RPC Client: SendAppendEntries could not contact server", "error", err, logging.To, string(id))
 				time.Sleep(time.Second)
 			}
 
@@ -88,7 +90,7 @@ func (r *ConcreteRpcClient) SendVoteRequests(a *rpc.RequestVoteRequest, reply ch
 					break
 				}
 
-				log.Printf("%s %s %s %s %s\n", utils.Red()("RPC Client: could not contact server"), utils.Red()(id), utils.Red()("with error:"), utils.Red()(err), utils.Red()(". Waiting for 2' before retry"))
+				slog.Error("RPC Client: SendVoteRequests could not contact server waiting some seconds", "error", err, logging.To, string(id))
 				time.Sleep(5 * time.Second)
 			}
 

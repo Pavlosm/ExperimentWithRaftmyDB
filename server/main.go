@@ -3,12 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"log/slog"
+	"myDb/rpc"
 	"myDb/server/cfg"
 	"myDb/server/environment"
 	"myDb/server/logging"
-	"myDb/server/rpc"
 	"myDb/server/rpcClient"
 	"myDb/server/rpcServer"
 	"myDb/server/state"
@@ -46,9 +45,10 @@ func main() {
 
 	e = environment.NewEnvironment()
 
-	server, stateMachine := NewRpcServer(sc, e)
-	s = *server
-	st = stateMachine
+	st = state.NewDefaultStateMachine(sc)
+
+	s = *rpcServer.NewRpcServer(e)
+
 	rc = rpcClient.NewRpcClient(sc)
 
 	go startServer()
@@ -65,65 +65,158 @@ func startServer() {
 
 	for {
 		select {
-		case v := <-e.Channels.VoteCmd: // external command
-			info("received vote request", v.Data.ServerId, "", "")
-
-			granted := st.HandleVoteRequest(
-				v.Data.ServerId,
-				v.Data.Term,
-				v.Data.LastLogTerm,
-				v.Data.LastLogIndex)
-
-			v.Reply <- &rpc.RequestVoteResponse{
-				ServerId:    st.GetServerIdString(),
-				Term:        st.GetCurrentTerm(),
-				VoteGranted: granted,
-			}
-
-			info("sent vote response", "", v.Data.ServerId, "")
-		case a := <-e.Channels.AppendEntriesCmd: // external command
-			slog.Info("received AppendEntries request", "from", a.Data.ServerId, "myTerm", st.GetCurrentTerm(), "mTerm", a.Data.Term)
-			st.HandleAppendEntriesRequest(a.Data.Term)
-			slog.Info("handled AppendEntries request, sending reply to channel", "from", a.Data.ServerId)
-			a.Reply <- &rpc.AppendEntriesResponse{
-				ServerId:   st.GetServerIdString(),
-				Term:       st.GetCurrentTerm(),
-				Success:    true,
-				MatchIndex: 1,
-			}
-			slog.Info("handled AppendEntries request", logging.From, a.Data.ServerId, logging.MessageTerm, a.Data.Term, logging.MyTerm, st.GetCurrentTerm())
+		case v := <-e.Channels.VoteCmd:
+			onReceivedExternalVoteRequest(v)
+		case a := <-e.Channels.AppendEntriesCmd:
+			onReceivedExternalAppendEntriesRequest(a)
 		case m := <-e.Channels.VoteReply: // response from request command
-			log.Printf("%s %s %s %s %s %s\n", utils.Yellow()("MAIN: New vote from"), utils.Yellow()(m.ServerId), utils.Yellow()("for term,"), utils.Yellow()(m.Term), utils.Yellow()("with value"), utils.Yellow()(m.VoteGranted))
-			st.HandleVoteResponse(m.ServerId, m.VoteGranted, m.Term)
-		case t := <-st.GetVoteFireChan(): // internal command
-			log.Printf("%s %s\n", utils.Red()("MAIN: expiry timer fired. time:"), t)
-			if st.HandleVoteTimerFired() {
-				i, t := st.GetLastLogProps()
-				rc.SendVoteRequests(&rpc.RequestVoteRequest{
-					Term:         st.GetCurrentTerm(),
-					ServerId:     st.GetServerIdString(),
-					LastLogIndex: i,
-					LastLogTerm:  t,
-				}, e.Channels.VoteReply, e.Channels.Err)
-			}
-		case tm := <-st.GetPingFireChan():
-			log.Println("MAIN: expiry timer fired. time:", tm)
-			i, t := st.GetLastLogProps()
-			rc.SendAppendEntries(&rpc.AppendEntriesRequest{
-				Term:         st.GetCurrentTerm(),
-				ServerId:     st.GetServerIdString(),
-				PrevLogIndex: i,
-				PrevLogTerm:  t,
-				LeaderCommit: 0,
-				Entries:      make([]*rpc.Entry, 0),
-			}, e.Channels.AppendEntriesReply, e.Channels.Err)
-			st.HandlePingRequestSent()
+			onReceivedExternalVoteReply(m)
+		case <-st.GetVoteFireChan():
+			onInternalVoteTimerFired()
+		case <-st.GetPingFireChan():
+			onInternalPingTimerFired()
 		case a := <-e.Channels.AppendEntriesReply:
-			log.Println("Received append entries reply", a)
+			onReceivedExternalAppendEntriesReply(a)
+		case c := <-e.Channels.CommandCmd:
+			onReceivedExternalCommandRequest(c)
 		case e := <-e.Channels.Err:
-			log.Println("An error ocurred", e)
+			onError(e)
 		}
 	}
+}
+
+func onReceivedExternalVoteRequest(v utils.WithReplyChan[*rpc.RequestVoteRequest, *rpc.RequestVoteResponse]) {
+	granted := st.HandleVoteRequest(
+		v.Data.ServerId,
+		v.Data.Term,
+		v.Data.LastLogTerm,
+		v.Data.LastLogIndex)
+
+	v.Reply <- &rpc.RequestVoteResponse{
+		ServerId:    st.GetServerIdString(),
+		Term:        st.GetCurrentTerm(),
+		VoteGranted: granted,
+	}
+
+	info("sent vote response", "", v.Data.ServerId, "", logging.VoteGranted, granted)
+}
+
+func onReceivedExternalAppendEntriesRequest(a utils.WithReplyChan[*rpc.AppendEntriesRequest, *rpc.AppendEntriesResponse]) {
+
+	var logs []state.Log
+
+	for _, e := range a.Data.Entries {
+		logs = append(logs, state.Log{
+			Term:    e.Term,
+			Index:   e.Index,
+			Command: e.Command,
+		})
+	}
+
+	st.HandleAppendEntriesRequest(a.Data.Term, a.Data.ServerId, logs)
+
+	a.Reply <- &rpc.AppendEntriesResponse{
+		ServerId:   st.GetServerIdString(),
+		Term:       st.GetCurrentTerm(),
+		Success:    true,
+		MatchIndex: 1,
+	}
+
+	info("handled AppendEntries request", a.Data.ServerId, "", string(a.Data.Term))
+}
+
+func onReceivedExternalVoteReply(m *rpc.RequestVoteResponse) {
+	info("new vote received", m.ServerId, "", string(m.Term), logging.VoteGranted, m.VoteGranted)
+	st.HandleVoteResponse(m.ServerId, m.VoteGranted, m.Term)
+}
+
+func onInternalVoteTimerFired() {
+
+	if !st.HandleVoteTimerFired() {
+		return
+	}
+
+	infoShort("becoming CANDIDATE Sending vote request to all servers")
+
+	i, t := st.GetLastLogProps()
+
+	rc.SendVoteRequests(&rpc.RequestVoteRequest{
+		Term:         st.GetCurrentTerm(),
+		ServerId:     st.GetServerIdString(),
+		LastLogIndex: i,
+		LastLogTerm:  t,
+	}, e.Channels.VoteReply, e.Channels.Err)
+}
+
+func onInternalPingTimerFired() {
+	infoShort("Sending append entries request to all servers")
+
+	i, t := st.GetLastLogProps()
+
+	rc.SendAppendEntries(&rpc.AppendEntriesRequest{
+		Term:         st.GetCurrentTerm(),
+		ServerId:     st.GetServerIdString(),
+		PrevLogIndex: i,
+		PrevLogTerm:  t,
+		LeaderCommit: 0,
+		Entries:      make([]*rpc.Entry, 0),
+	}, e.Channels.AppendEntriesReply, e.Channels.Err)
+
+	st.HandlePingRequestSent()
+}
+
+func onReceivedExternalAppendEntriesReply(a *rpc.AppendEntriesResponse) {
+	info("Received append entries reply", a.ServerId, "", strconv.FormatInt(a.Term, 10))
+}
+
+func onReceivedExternalCommandRequest(c utils.WithReplyChan[*rpc.CommandRequest, *rpc.CommandResponse]) {
+
+	if st.GetServerRole() != state.Leader {
+		c.Reply <- &rpc.CommandResponse{
+			Success:  false,
+			LeaderId: st.GetLeaderId(),
+		}
+		infoShort("not a leader, sending error response")
+		return
+	}
+
+	l, err := st.HandleCommandRequest(c.Data.Command)
+
+	if err != nil {
+		c.Reply <- &rpc.CommandResponse{
+			Success:  false,
+			LeaderId: st.GetLeaderId(),
+		}
+		return
+	}
+
+	i, t := st.GetLastLogProps()
+
+	rc.SendAppendEntries(&rpc.AppendEntriesRequest{
+		Term:         st.GetCurrentTerm(),
+		ServerId:     st.GetServerIdString(),
+		PrevLogIndex: i,
+		PrevLogTerm:  t,
+		LeaderCommit: 0,
+		Entries: []*rpc.Entry{
+			{
+				Term:    t,
+				Index:   i,
+				Command: l.Command,
+			},
+		},
+	}, e.Channels.AppendEntriesReply, e.Channels.Err)
+
+	c.Reply <- &rpc.CommandResponse{
+		Success:  true,
+		LeaderId: st.GetLeaderId(),
+	}
+
+	infoShort("handled Command request")
+}
+
+func onError(e error) {
+	slog.Error("An error ocurred", "error", e)
 }
 
 func startRpcServer() {
@@ -133,15 +226,18 @@ func startRpcServer() {
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", p))
 	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
+		slog.Error("failed to listen", "error", err)
+		panic(err)
 	}
 	gs := grpc.NewServer()
 
 	rpc.RegisterRaftServiceServer(gs, &s)
-	log.Printf("MAIN: server listening at %v\n", lis.Addr())
+	msg := "MAIN: server listening at " + lis.Addr().String()
+	slog.Info(msg)
 
 	if err := gs.Serve(lis); err != nil {
-		log.Printf("MAIN: failed to serve: %v\n", err)
+		slog.Error("failed to serve", "error", err)
+		panic(err)
 	}
 }
 
@@ -169,5 +265,9 @@ func info(msg string, from string, to string, mTerm string, args ...any) {
 	args = append(args, logging.MyTerm)
 	args = append(args, st.GetCurrentTerm())
 
+	slog.Info(msg, args...)
+}
+
+func infoShort(msg string, args ...any) {
 	slog.Info(msg, args...)
 }

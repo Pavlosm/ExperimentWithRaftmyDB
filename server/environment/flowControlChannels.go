@@ -1,7 +1,7 @@
 package environment
 
 import (
-	"myDb/server/rpc"
+	"myDb/rpc"
 	"myDb/server/utils"
 )
 
@@ -10,6 +10,7 @@ type FlowControlChannels struct {
 	AppendEntriesCmd   chan utils.WithReplyChan[*rpc.AppendEntriesRequest, *rpc.AppendEntriesResponse]
 	VoteReply          chan *rpc.RequestVoteResponse
 	AppendEntriesReply chan *rpc.AppendEntriesResponse
+	CommandCmd         chan utils.WithReplyChan[*rpc.CommandRequest, *rpc.CommandResponse]
 	Err                chan error
 }
 
@@ -19,6 +20,7 @@ func NewFlowControlChannels() FlowControlChannels {
 		AppendEntriesCmd:   make(chan utils.WithReplyChan[*rpc.AppendEntriesRequest, *rpc.AppendEntriesResponse]),
 		VoteReply:          make(chan *rpc.RequestVoteResponse),
 		AppendEntriesReply: make(chan *rpc.AppendEntriesResponse),
+		CommandCmd:         make(chan utils.WithReplyChan[*rpc.CommandRequest, *rpc.CommandResponse]),
 		Err:                make(chan error),
 	}
 }

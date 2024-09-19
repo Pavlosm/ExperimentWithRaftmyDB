@@ -33,14 +33,14 @@ type Timer interface {
 	GetFireChan() <-chan time.Time
 }
 
-func NewTimeoutMod(cfg TimerConf) Timer {
+func NewTimeoutMod(cfg TimerConf, bootStrapDuration time.Duration) Timer {
 
 	rc := make(chan bool)
 	sc := make(chan bool)
 	r := rand.New(rand.NewSource(int64(time.Now().Nanosecond())))
 	return &ConcreteTimer{
 		Rand:      r,
-		Timer:     time.NewTimer(60 * time.Second),
+		Timer:     time.NewTimer(bootStrapDuration),
 		ResetChan: rc,
 		StopChan:  sc,
 		Cfg:       cfg,
@@ -51,6 +51,8 @@ func NewTimeoutMod(cfg TimerConf) Timer {
 func (t *ConcreteTimer) Start() {
 	t.mu.Lock()
 	if t.started {
+		t.mu.Unlock()
+		slog.Debug("timer was started un-lock and return", "name", t.Cfg.Name)
 		return
 	}
 	t.Stop()
@@ -78,9 +80,7 @@ func (t *ConcreteTimer) Reset() {
 }
 
 func (t *ConcreteTimer) Stop() {
-	if t.Timer.Stop() {
-		<-t.C
-	}
+	t.Timer.Stop()
 }
 
 func (t *ConcreteTimer) GetResetChan() chan<- bool {

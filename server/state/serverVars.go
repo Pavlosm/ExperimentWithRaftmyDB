@@ -6,6 +6,7 @@ type ServerVars struct {
 	CurrentTerm int64
 	VotedFor    cfg.NodeId
 	Role        ServerRole
+	LeaderId    cfg.NodeId
 }
 
 func NewDefaultServerVars() ServerVars {
@@ -13,5 +14,6 @@ func NewDefaultServerVars() ServerVars {
 		CurrentTerm: 1,
 		VotedFor:    cfg.NodeId(""),
 		Role:        Follower,
+		LeaderId:    cfg.NodeId(""),
 	}
 }

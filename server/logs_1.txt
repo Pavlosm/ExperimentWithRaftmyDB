@@ -1,0 +1,9 @@
+0|1|test
+0|1|some more tests
+0|1|wow did not expect this to work
+0|0|should redirect
+0|0|now we are good
+0|2|test
+0|2|test
+0|1|test
+0|2|some new message
