@@ -7,3 +7,22 @@
 0|1|test
 0|2|test
 0|1|some new message
+0|2|some text
+0|2|ok some more log entries
+0|1|gitlab
+0|3|SELECT * FROM Event.Log
+0|2|some test
+0|2|SELECT TOP 1 * FROM Event.Log
+0|4|SELECT 1
+0|3|test
+0|4|one more test
+0|5|ok
+0|5|TEST once more
+0|4|test
+0|4|test
+0|4|test
+0|4|test
+0|4|test
+0|5|test
+0|5|test
+0|5|test

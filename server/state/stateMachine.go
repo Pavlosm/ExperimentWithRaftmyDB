@@ -52,8 +52,8 @@ func NewDefaultStateMachine(sc cfg.ServerConfig) *StateMachine {
 		ServerVars:      NewDefaultServerVars(),
 		LogVars:         NewDefaultLogVars(),
 		CandidateVars:   NewDefaultCandidateVars(),
-		VoteTimeout:     NewTimeoutMod(TimerConf{MinMs: 15000, MaxMs: 20000, Name: "Vote"}, 30*time.Second),
-		PingTimeout:     NewTimeoutMod(TimerConf{MinMs: 5000, MaxMs: 5000, Name: "Ping"}, 48*time.Hour),
+		VoteTimeout:     NewTimeoutMod(TimerConf{MinMs: 2000, MaxMs: 6000, Name: "Vote"}, 30*time.Second),
+		PingTimeout:     NewTimeoutMod(TimerConf{MinMs: 1000, MaxMs: 1000, Name: "Ping"}, 48*time.Hour),
 		ServerConfig:    sc,
 		StateRepository: InitStateRepository(sc),
 	}
